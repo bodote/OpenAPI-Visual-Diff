@@ -414,7 +414,20 @@ def render(model, entries, global_changes, tags, old_label, new_label) -> str:
         default=str,  # YAML happily parses `2026-01-31` into a date object
     ).replace("</", "<\\/")
 
-    return TEMPLATE.replace("__PAYLOAD__", payload)
+    # Every change the page lists, endpoint-level and global — the same sum oasdiff's
+    # "N changes" on the verdict line counts, so the two numbers agree on sight.
+    n_changes = (sum(len(e["changes"]) for e in entries.values()) + len(global_changes))
+    label = f"expand {n_changes} impacted" if n_changes else "expand impacted"
+    return (TEMPLATE.replace("__EXPAND_LABEL__", label)
+            .replace("__TIP_JS__", _tip_js())
+            .replace("__PAYLOAD__", payload))
+
+
+def _tip_js() -> str:
+    """The review page's tooltip component, so the frame's tooltips are the page's own.
+    The standalone copy of this script has no hrbuild next to it and goes without."""
+    tip = Path(__file__).resolve().parent / "hrbuild" / "assets" / "tip.js"
+    return tip.read_text(encoding="utf-8").replace("</", "<\\/") if tip.is_file() else ""
 
 
 TEMPLATE = r"""<!doctype html>
@@ -542,13 +555,58 @@ TEMPLATE = r"""<!doctype html>
   .dv-badge.removed  { background: var(--dv-removed); }
 
   /* ---------- the trail down to a changed field ----------
-     Opening the tree is only half of it: once four levels are showing, the reader still
-     has to find which of the fields on screen is the new one. The trail is deliberately
-     quieter than the leaf — a hairline on every ancestor says "this is the way down",
-     the leaf says "here". Levels reuse the note list's l1/l2/l3 vocabulary rather than
-     inventing a third scale, and every colour comes from the theme vars so dark mode
-     needs no second set of rules. */
-  .swagger-ui .dv-hit-path { box-shadow: inset 2px 0 0 var(--dv-muted); }
+     Opening the tree is only half of it: once six levels are showing, the reader still
+     has to find which of the fields on screen is the new one — and a grey hairline on
+     every ancestor turned out to be as quiet as Swagger UI's own indent guides, so the
+     way down was there and nobody saw it. The road is now drawn for real: one glowing
+     line per changed field (`.dv-roads`, an SVG laid over the page by the script), from
+     the schema root down and in, step by step, to the field itself, with a spark running
+     along it so the eye is pulled down to the end. The leaf breathes and its chip
+     blinks. Levels reuse the note list's l1/l2/l3 vocabulary rather than inventing a
+     third scale, and every colour comes from the theme vars so dark mode needs no second
+     set of rules. */
+  .l1 { --dv-lvl: var(--dv-added); }
+  .l2 { --dv-lvl: var(--dv-modified); }
+  .l3 { --dv-lvl: var(--dv-breaking); }
+  /* An ancestor on the road says so by its name, in the colour of the worst change it
+     leads to — the line alone would leave the reader matching x-positions to names. */
+  .swagger-ui .dv-hit-path.l1, .swagger-ui .dv-hit-path.l2, .swagger-ui .dv-hit-path.l3 {
+    --dv-road-name: var(--dv-lvl);
+  }
+  .swagger-ui .dv-hit-path > .json-schema-2020-12-head .json-schema-2020-12__title,
+  .swagger-ui tr.property-row.dv-hit-path > td:first-child {
+    color: var(--dv-road-name, var(--dv-fg)); font-weight: 700;
+  }
+  /* Under the sticky toolbar (z-index 50), over the schema boxes, and never in the way
+     of a click: it is paint, not a control. */
+  svg.dv-roads {
+    position: absolute; left: 0; top: 0; pointer-events: none; z-index: 40;
+    overflow: visible;
+  }
+  .dv-roads path { fill: none; stroke: var(--dv-lvl); stroke-linecap: round;
+                   stroke-linejoin: round; }
+  .dv-roads .dv-road-bed {
+    stroke-width: 3; opacity: .75;
+    filter: drop-shadow(0 0 3px var(--dv-lvl)) drop-shadow(0 0 7px var(--dv-lvl));
+  }
+  .dv-roads .dv-road-spark {
+    stroke-width: 5; stroke: #fff;
+    filter: drop-shadow(0 0 3px var(--dv-lvl)) drop-shadow(0 0 8px var(--dv-lvl))
+            drop-shadow(0 0 14px var(--dv-lvl));
+  }
+  @keyframes dv-breathe {
+    from { box-shadow: 0 0 0 1px color-mix(in srgb, var(--dv-lvl) 35%, transparent),
+                       0 0 6px color-mix(in srgb, var(--dv-lvl) 20%, transparent);
+           background-color: color-mix(in srgb, var(--dv-lvl) 10%, transparent); }
+    to   { box-shadow: 0 0 0 1px color-mix(in srgb, var(--dv-lvl) 80%, transparent),
+                       0 0 22px color-mix(in srgb, var(--dv-lvl) 55%, transparent);
+           background-color: color-mix(in srgb, var(--dv-lvl) 24%, transparent); }
+  }
+  @keyframes dv-blink {
+    0%, 55% { opacity: 1; box-shadow: 0 0 10px var(--dv-lvl); }
+    75%     { opacity: .2; box-shadow: none; }
+    100%    { opacity: 1; box-shadow: 0 0 10px var(--dv-lvl); }
+  }
   /* The spine is drawn OUTSIDE the box, by a pseudo-element, rather than as an inset
      shadow: the leaf article starts exactly at its property name, so an inset spine lands
      on the first letter — "vetId" reads as "etId" with a green bar over the v. Nudging
@@ -571,19 +629,34 @@ TEMPLATE = r"""<!doctype html>
     box-shadow: inset 3px 0 0 currentColor; padding-left: 9px;
     color: var(--dv-fg); font-weight: 700;
   }
-  .swagger-ui .dv-hit.l1 { background: rgba(46,158,91,.10); color: var(--dv-added); }
-  .swagger-ui .dv-hit.l2 { background: rgba(217,130,24,.12); color: var(--dv-modified); }
-  .swagger-ui .dv-hit.l3 { background: rgba(215,38,61,.10); color: var(--dv-breaking); }
-  .swagger-ui tr.dv-hit.l1 > td { background: rgba(46,158,91,.10); }
-  .swagger-ui tr.dv-hit.l2 > td { background: rgba(217,130,24,.12); }
-  .swagger-ui tr.dv-hit.l3 > td { background: rgba(215,38,61,.10); }
-  .dv-fieldmark {
-    font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
-    padding: 1px 6px; border-radius: 4px; margin-left: 8px; align-self: center;
+  /* The leaf breathes — a halo that swells and settles in the level's colour — so it
+     is found from anywhere on the screen, not only by someone already reading that row. */
+  .swagger-ui .dv-hit.l1, .swagger-ui .dv-hit.l2, .swagger-ui .dv-hit.l3 {
+    color: var(--dv-lvl);
+    background-color: color-mix(in srgb, var(--dv-lvl) 14%, transparent);
+    animation: dv-breathe 1.3s ease-in-out infinite alternate;
   }
-  .dv-fieldmark.l1 { background: rgba(46,158,91,.14); color: var(--dv-added); }
-  .dv-fieldmark.l2 { background: rgba(217,130,24,.16); color: var(--dv-modified); }
-  .dv-fieldmark.l3 { background: rgba(215,38,61,.14); color: var(--dv-breaking); }
+  .swagger-ui article.dv-hit::before {
+    width: 4px; box-shadow: 0 0 6px currentColor, 0 0 12px currentColor;
+  }
+  .swagger-ui .dv-hit > .json-schema-2020-12-head .json-schema-2020-12__title {
+    text-shadow: 0 0 10px color-mix(in srgb, var(--dv-lvl) 70%, transparent);
+  }
+  .swagger-ui tr.dv-hit > td {
+    background: color-mix(in srgb, var(--dv-lvl) 16%, transparent);
+  }
+  /* A solid chip that blinks: the one word on the page that must not be read past. */
+  .dv-fieldmark {
+    font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 4px; margin-left: 8px; align-self: center;
+    background: var(--dv-lvl); color: var(--dv-bg);
+    animation: dv-blink 1.1s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .swagger-ui .dv-hit.l1, .swagger-ui .dv-hit.l2, .swagger-ui .dv-hit.l3,
+    .dv-fieldmark { animation: none; }
+    .dv-roads .dv-road-spark { display: none; }
+  }
   /* Fields the auto-expand deliberately did not open. Saying nothing here would teach
      the reader that what is open is everything — the exact failure this feature fixes. */
   .dv-deepmore {
@@ -731,6 +804,26 @@ TEMPLATE = r"""<!doctype html>
     color: var(--dv-dim);
   }
   .swagger-ui .json-schema-2020-12__attribute--primary { color: var(--dv-attr); }
+  /* ---------- Swagger UI's form controls ----------
+     The parameter inputs and the enum <select>s are painted white / light grey with a
+     dark caret SVG, whatever the theme: on the dark card they were the only light boxes
+     on the page. Colour only, from the theme vars; the caret is redrawn in --dv-muted. */
+  .swagger-ui input[type=text], .swagger-ui input[type=password],
+  .swagger-ui input[type=search], .swagger-ui input[type=email],
+  .swagger-ui input[type=file], .swagger-ui textarea, .swagger-ui select {
+    background-color: var(--dv-card); color: var(--dv-fg);
+    border: 1px solid var(--dv-line); box-shadow: none;
+  }
+  .swagger-ui input::placeholder, .swagger-ui textarea::placeholder { color: var(--dv-dim); }
+  .swagger-ui input[disabled], .swagger-ui textarea[disabled], .swagger-ui select[disabled] {
+    background-color: var(--dv-code); color: var(--dv-muted); opacity: 1;
+  }
+  .swagger-ui select {
+    background-image: linear-gradient(45deg, transparent 50%, var(--dv-muted) 50%),
+                      linear-gradient(135deg, var(--dv-muted) 50%, transparent 50%);
+    background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%;
+    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+  }
   /* The required-field asterisk is literal `red`, which on the dark card reads as a
      smudge rather than a mark. The page already owns a red that survives there. */
   .swagger-ui .json-schema-2020-12-property--required
@@ -738,6 +831,23 @@ TEMPLATE = r"""<!doctype html>
       > .json-schema-2020-12-head .json-schema-2020-12__title:after {
     color: var(--dv-breaking);
   }
+  /* A field's description is Swagger UI's first row of its body, so every expanded node
+     grew an extra line of prose between its name and its children and the tree lost its
+     steady one-field-per-row pace. `layoutDescriptions()` lifts it onto the head row
+     instead, into the empty room right of the type chips: one line, cut with an ellipsis,
+     the whole text in a tooltip when it was cut. The script sets `left` (just past the
+     head's last chip) and the row height; a head too wide to leave room keeps the old row.
+     The schema box is an inline-block that shrink-wraps its widest row, which would cut
+     every description at the end of the longest type chip, so it takes the full column. */
+  .swagger-ui .model-box:has(> article.json-schema-2020-12) { display: block; }
+  .swagger-ui article.json-schema-2020-12 { position: relative; }
+  .swagger-ui .json-schema-2020-12-body > .json-schema-2020-12-keyword--description.dv-desc-inline {
+    position: absolute; top: 0; right: 8px; margin: 0; padding: 0;
+    left: var(--dv-desc-left); height: var(--dv-desc-h); line-height: var(--dv-desc-h);
+    text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .swagger-ui .dv-desc-inline * { display: inline; margin: 0; padding: 0; }
+  .swagger-ui .dv-desc-inline p + p::before { content: " "; }
   .swagger-ui .opblock.opblock-deprecated { opacity: .7; }
   .dv-count-hidden { font-size: 12px; opacity: .6; }
 </style>
@@ -751,16 +861,22 @@ TEMPLATE = r"""<!doctype html>
        only cost the chips their room. Standalone it is not lost: it is the tab title. -->
   <span id="dv-chips"></span>
   <span class="dv-spacer"></span>
-  <!-- No tooltip here on purpose. The report's one tooltip component (TIP_JS, driven by
-       data-tip) lives in the host page and cannot reach into this frame, and a native
-       title= is the thing the house rule exists to keep out. The checkbox demonstrates
-       itself the moment it is ticked. -->
-  <label class="dv-toggle"><input type="checkbox" id="dv-expand"> expand impacted</label>
+  <!-- No tooltip here on purpose: the checkbox demonstrates itself the moment it is
+       ticked. The count is the verdict line's count: that line
+       says "25 changes" right above this frame, and a toggle that opened 11 endpoints
+       with no number on it read as a second, contradicting tally. -->
+  <label class="dv-toggle"><input type="checkbox" id="dv-expand"> __EXPAND_LABEL__</label>
 </div>
 <div id="dv-global"></div>
 <div id="swagger-ui"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.29.1/swagger-ui-bundle.min.js"></script>
+<script>
+// The report's one tooltip component (hrbuild/assets/tip.js, driven by data-tip), inlined:
+// the host page's copy cannot reach into this frame, and a native title= is the thing the
+// house rule exists to keep out.
+__TIP_JS__
+</script>
 <script>
 // ?theme=dark|light pins the theme; with no parameter the system decides.
 const THEME = new URLSearchParams(location.search).get('theme');
@@ -826,6 +942,38 @@ function keyOf(op) {
   return m.textContent.trim().toUpperCase() + ' ' + path;
 }
 
+// Lift each field's description onto its head row, right of the type chips (see the CSS).
+// Measured, not guessed: the head's last chip ends wherever its name, flags and
+// constraints happen to end, and the field-change chip lands there too. Re-run with
+// decorate(), so a node opened by hand or by the walk is laid out once it renders.
+function layoutDescriptions() {
+  document.querySelectorAll(
+    '.swagger-ui .json-schema-2020-12-body > .json-schema-2020-12-keyword--description'
+  ).forEach(d => {
+    const art = d.parentElement.parentElement;
+    const head = art.querySelector(':scope > .json-schema-2020-12-head');
+    const last = head?.lastElementChild;
+    if (!last) return;
+    const a = art.getBoundingClientRect();
+    const left = Math.ceil(last.getBoundingClientRect().right - a.left + 24);
+    const fits = a.width - 8 - left >= 80;
+    d.classList.toggle('dv-desc-inline', fits);
+    if (!fits) { d.removeAttribute('data-tip'); return; }
+    const h = Math.round(head.getBoundingClientRect().height);
+    if (d.style.getPropertyValue('--dv-desc-left') !== left + 'px') {
+      d.style.setProperty('--dv-desc-left', left + 'px');
+    }
+    if (d.style.getPropertyValue('--dv-desc-h') !== h + 'px') {
+      d.style.setProperty('--dv-desc-h', h + 'px');
+    }
+    const cut = d.scrollWidth > d.clientWidth + 1;
+    const text = d.textContent.trim();
+    if (!cut) d.removeAttribute('data-tip');
+    else if (d.getAttribute('data-tip') !== text) d.setAttribute('data-tip', text);
+  });
+}
+window.addEventListener('resize', layoutDescriptions);
+
 // Swagger UI re-renders on expand/collapse, so decorating is idempotent and re-run.
 function decorate() {
   document.querySelectorAll('.swagger-ui .opblock').forEach(op => {
@@ -856,6 +1004,7 @@ function decorate() {
   });
   apply();
   autoCollapse();
+  layoutDescriptions();
 }
 
 // A controller nobody touched is folded away on arrival — once, so that
@@ -1044,17 +1193,122 @@ async function revealTarget(op, c, run) {
   if (!found) return false;
   const { kit } = found;
   let cur = found.root;
+  const chain = [];
   for (const step of c.target.steps) {
     if (run !== revealRun) return false;        // the reader changed their mind
     if (!await openNode(kit, cur)) return false;
     const next = await waitFor(() => kit.child(cur, step), STEP_WAIT);
     if (!next) return false;
-    (kit.mark(cur)).classList.add('dv-hit-path');
+    markPath(kit.mark(cur), c.level);
+    chain.push(kit.mark(cur));
     cur = next;
   }
   markLeaf(kit, cur, c);
+  ROADS.push({ chain, leaf: kit.mark(cur), level: c.level });
+  drawRoads();
   return true;
 }
+
+// An ancestor shared by several changed fields wears the colour of the worst of them.
+function markPath(el, level) {
+  el.classList.add('dv-hit-path');
+  const had = [1, 2, 3].find(l => el.classList.contains('l' + l)) || 0;
+  if (level > had) {
+    el.classList.remove('l' + had);
+    el.classList.add('l' + level);
+  }
+}
+
+// ---- the road: one glowing line per changed field, root to leaf ----
+// Drawn as an SVG over the page rather than as borders on the boxes, because the road
+// is not the boxes' edges: it runs down an ancestor only as far as the child it leads
+// into, then steps in to that child, and a box's border cannot stop half-way down.
+// Positions are read off the live layout, so anything that moves the tree — another
+// operation opening, the window narrowing — re-draws it on the next frame.
+const ROADS = [];
+const SVG_NS = 'http://www.w3.org/2000/svg';
+let roadLayer = null, roadFrame = 0;
+
+function headOf(el) {
+  return el.querySelector(':scope > .json-schema-2020-12-head')
+      || el.querySelector(':scope > td:first-child')
+      || el.querySelector(':scope > span > button.model-box-control')
+      || el;
+}
+
+// Where the road turns at this node: just left of its name — a 2020-12 box starts at
+// its first letter, so its own edge would put the road through the "p" of "pets" — and
+// level with the middle of the name. The leaf's spine sits exactly there, 7px out.
+function roadPoint(el) {
+  const box = el.getBoundingClientRect(), head = headOf(el).getBoundingClientRect();
+  if (!box.height) return null;                 // filtered out, collapsed, detached
+  return {
+    x: box.left + scrollX - 5.5,
+    y: head.top + scrollY + Math.min(head.height / 2, 14),
+  };
+}
+
+function roadPath(road) {
+  if (!road.leaf.isConnected || road.chain.some(el => !el.isConnected)) return null;
+  const pts = [...road.chain, road.leaf].map(roadPoint);
+  if (pts.some(p => !p)) return null;
+  // Down the ancestor's rail to the level of the next name, then in to it.
+  let d = `M${pts[0].x} ${pts[0].y}`;
+  for (const p of pts.slice(1)) d += ` V${p.y} H${p.x}`;
+  return d;
+}
+
+function drawRoads() {
+  cancelAnimationFrame(roadFrame);
+  roadFrame = requestAnimationFrame(() => {
+    if (!roadLayer) {
+      roadLayer = document.createElementNS(SVG_NS, 'svg');
+      roadLayer.setAttribute('class', 'dv-roads');
+      roadLayer.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(roadLayer);
+    }
+    roadLayer.setAttribute('width', document.documentElement.scrollWidth);
+    roadLayer.setAttribute('height', document.documentElement.scrollHeight);
+    for (const road of ROADS) {
+      const d = roadPath(road);
+      if (!road.g) {
+        road.g = document.createElementNS(SVG_NS, 'g');
+        road.g.setAttribute('class', 'l' + road.level);
+        for (const cls of ['dv-road-bed', 'dv-road-spark']) {
+          const path = document.createElementNS(SVG_NS, 'path');
+          path.setAttribute('class', cls);
+          road.g.appendChild(path);
+        }
+        roadLayer.appendChild(road.g);
+      }
+      road.g.style.display = d ? '' : 'none';
+      if (!d || d === road.d) continue;
+      road.d = d;
+      const [bed, spark] = road.g.children;
+      bed.setAttribute('d', d);
+      spark.setAttribute('d', d);
+      // A short bright dash with a gap longer than the whole road is a spark: sliding
+      // its offset from "not yet started" to "past the end" runs it down the road and
+      // into the field. Speed is per pixel, so a deep field is not reached in a blur.
+      const len = spark.getTotalLength(), dash = 26;
+      spark.style.strokeDasharray = `${dash} ${len + dash}`;
+      road.spark?.cancel();
+      road.spark = spark.animate(
+        [{ strokeDashoffset: dash }, { strokeDashoffset: -len }],
+        { duration: 900 + len * 2.2, iterations: Infinity,
+          easing: 'cubic-bezier(.45,0,.2,1)' });
+    }
+  });
+}
+
+function clearRoads() {
+  for (const road of ROADS) { road.spark?.cancel(); road.g?.remove(); }
+  ROADS.length = 0;
+}
+
+new ResizeObserver(drawRoads).observe(document.body);
+new MutationObserver(() => { if (ROADS.length) drawRoads(); })
+  .observe(document.getElementById('swagger-ui'), { childList: true, subtree: true });
 
 // One run at a time. A second click supersedes the first rather than racing it.
 let revealRun = 0;
@@ -1102,6 +1356,7 @@ function reportMissed(op, missed) {
 // the fields four levels down inside a collapsed schema, which is where this started.
 document.getElementById('dv-expand').onchange = e => {
   revealRun++;                                   // cancel anything still walking
+  clearRoads();
   document.querySelectorAll('.swagger-ui .opblock').forEach(op => {
     const s = op.dataset.dvState;
     if (!s || s === 'untouched') return;
