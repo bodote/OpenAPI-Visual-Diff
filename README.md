@@ -24,8 +24,7 @@ It renders the **new** spec in real Swagger UI (from CDN), then:
 - collects non-endpoint changes (components, servers, security) in a box on top.
 
 The page follows the system theme — light or dark — and `?theme=dark` / `?theme=light`
-pins it, which is what an embedding page uses when it wants the frame to match rather
-than guess. Swagger UI ships light-only, so the dark side is a colour-only override
+pins it. Swagger UI ships light-only, so the dark side is a colour-only override
 layer: every dimension, weight and radius stays Swagger UI's, and the page still reads
 as the screen everyone already knows.
 
@@ -33,6 +32,13 @@ The toolbar counts double as filters: click a chip to hide that class of change.
 `only touched endpoints` collapses the untouched noise entirely and is remembered
 in the URL hash (`#only-touched`), so the filtered view is what a colleague sees
 when you paste them the link.
+
+**Embedding it in another page** without an iframe: put the `<head>`'s stylesheets and
+the `<body>`'s markup into a shadow root on a host element, then run the body's scripts in
+order with `data-dv-host="<host id>"` on the inline one. The script works against that root
+instead of the document, reads the view from the host's `data-hash` (`#only-touched`) and
+the theme from its `data-theme`, and pins its toolbar `--dv-sticky-top` below the window's
+top edge (set it to the height of your own pinned header). The bundle may be loaded `defer`.
 
 ## Usage
 
